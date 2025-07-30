@@ -66,4 +66,4 @@ exe = EXE(pyz,
           target_arch=None,
           codesign_identity=None,
           entitlements_file=None,
-          icon=None)  # You can add an icon file here if you have one
+          icon='assets/icon.ico')  # Using the app icon with multiple resolutions for the executable

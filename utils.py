@@ -6,10 +6,41 @@ Utility functions for video processing with FFmpeg
 """
 
 import os
-import subprocess
 import re
-import math
+import subprocess
+import shutil
+from pathlib import Path
 import json
+import math
+import sys
+
+def get_subprocess_startupinfo():
+    """
+    Create subprocess startupinfo to hide console window on Windows
+    """
+    if sys.platform == "win32":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        return startupinfo
+    return None
+
+def run_ffmpeg_hidden(*args, **kwargs):
+    """
+    Run subprocess with hidden console on Windows
+    Wrapper around subprocess.run that automatically adds startupinfo and creationflags
+    to hide console window on Windows platforms
+    """
+    # Add startupinfo to kwargs if on Windows
+    if sys.platform == "win32":
+        if "startupinfo" not in kwargs:
+            kwargs["startupinfo"] = get_subprocess_startupinfo()
+        
+        # CREATE_NO_WINDOW flag (0x08000000) suppresses console window
+        if "creationflags" not in kwargs:
+            kwargs["creationflags"] = 0x08000000
+    
+    return subprocess.run(*args, **kwargs)
 
 def get_ffmpeg_path(app_dir):
     """Get the path to the FFmpeg executable"""
@@ -20,7 +51,7 @@ def get_ffmpeg_path(app_dir):
     
     # Fallback: Try to use system FFmpeg if available
     try:
-        subprocess.run(["ffmpeg", "-version"], 
+        run_ffmpeg_hidden(["ffmpeg", "-version"], 
                        stdout=subprocess.PIPE, 
                        stderr=subprocess.PIPE,
                        check=True)
@@ -61,7 +92,7 @@ def get_video_duration(video_path, app_dir):
     
     try:
         # Run FFmpeg to get video information
-        result = subprocess.run(
+        result = run_ffmpeg_hidden(
             [ffmpeg_path, "-i", video_path], 
             capture_output=True, 
             text=True
@@ -156,8 +187,8 @@ def cut_video_into_parts(video_path, output_dir, num_parts, duration, app_dir, s
                     os.path.join(output_dir, f"part_{i+1:03d}{ext}")
                 ]
             
-            # Run FFmpeg command
-            process = subprocess.run(
+            # Run FFmpeg command with hidden console
+            process = run_ffmpeg_hidden(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -239,8 +270,8 @@ def cut_video_by_size(video_path, output_dir, target_size_mb, duration, total_si
                     os.path.join(output_dir, f"part_{i+1:03d}{ext}")
                 ]
             
-            # Run FFmpeg command
-            process = subprocess.run(
+            # Run FFmpeg command with hidden console
+            process = run_ffmpeg_hidden(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -315,8 +346,8 @@ def cut_video_by_duration(video_path, output_dir, target_duration, total_duratio
                     os.path.join(output_dir, f"part_{i+1:03d}{ext}")
                 ]
             
-            # Run FFmpeg command
-            process = subprocess.run(
+            # Run FFmpeg command with hidden console
+            process = run_ffmpeg_hidden(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
