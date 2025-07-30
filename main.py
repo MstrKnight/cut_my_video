@@ -11,13 +11,15 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import threading
-from utils import get_video_duration, cut_video_into_parts
+import time
+from datetime import timedelta
+from utils import get_video_duration, cut_video_into_parts, cut_video_by_size, cut_video_by_duration, get_video_size
 
 class VideoCutterApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Cut It Now - Video Cutter")
-        self.root.geometry("500x400")
+        self.root.geometry("600x500")
         self.root.resizable(True, True)
         
         # Variables
@@ -25,6 +27,13 @@ class VideoCutterApp:
         self.num_parts = tk.IntVar(value=2)  # Default: 2 parts
         self.status = tk.StringVar(value="Ready")
         self.is_processing = False
+        self.elapsed_time = tk.StringVar(value="00:00:00")
+        self.split_mode = tk.StringVar(value="parts")  # Default: split by parts
+        self.target_size = tk.DoubleVar(value=100)  # Default: 100 MB
+        self.target_duration = tk.DoubleVar(value=10)  # Default: 10 minutes
+        self.timer_running = False
+        self.start_time = 0
+        self.timer_id = None
         
         # Get the directory of the executable or script
         if getattr(sys, 'frozen', False):
@@ -35,6 +44,7 @@ class VideoCutterApp:
             self.app_dir = os.path.dirname(os.path.abspath(__file__))
         
         self.create_widgets()
+        self.setup_drag_drop()
         
     def create_widgets(self):
         # Main frame
@@ -42,7 +52,7 @@ class VideoCutterApp:
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # Video selection
-        ttk.Label(main_frame, text="Select Video:", font=("Arial", 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
+        ttk.Label(main_frame, text="Select Video (or drag and drop):", font=("Arial", 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
         
         video_frame = ttk.Frame(main_frame)
         video_frame.grid(row=1, column=0, columnspan=2, sticky=tk.W+tk.E, pady=(0, 15))
@@ -52,32 +62,113 @@ class VideoCutterApp:
         
         ttk.Button(video_frame, text="Browse", command=self.browse_video).pack(side=tk.RIGHT, padx=(5, 0))
         
-        # Number of parts
-        parts_frame = ttk.Frame(main_frame)
-        parts_frame.grid(row=2, column=0, columnspan=2, sticky=tk.W+tk.E, pady=(0, 15))
+        # Split mode selection
+        split_mode_frame = ttk.Frame(main_frame)
+        split_mode_frame.grid(row=2, column=0, columnspan=2, sticky=tk.W+tk.E, pady=(0, 15))
         
-        ttk.Label(parts_frame, text="Number of parts:", font=("Arial", 12)).pack(side=tk.LEFT)
+        ttk.Label(split_mode_frame, text="Split mode:", font=("Arial", 12)).pack(side=tk.LEFT)
         
-        parts_spinner = ttk.Spinbox(parts_frame, from_=2, to=100, width=5, textvariable=self.num_parts)
-        parts_spinner.pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Radiobutton(split_mode_frame, text="Equal parts", variable=self.split_mode, value="parts").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Radiobutton(split_mode_frame, text="By size", variable=self.split_mode, value="size").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(split_mode_frame, text="By duration", variable=self.split_mode, value="duration").pack(side=tk.LEFT, padx=5)
+        
+        # Parameters frame (changes based on split mode)
+        self.params_frame = ttk.LabelFrame(main_frame, text="Split Parameters")
+        self.params_frame.grid(row=3, column=0, columnspan=2, sticky=tk.W+tk.E, pady=(0, 15))
+        
+        # Initial parameters (parts mode)
+        self.show_parts_params()
+        
+        # Bind the change of split mode
+        self.split_mode.trace("w", lambda *args: self.update_params_frame())
         
         # Process button
         process_frame = ttk.Frame(main_frame)
-        process_frame.grid(row=3, column=0, columnspan=2, sticky=tk.W+tk.E, pady=(0, 15))
+        process_frame.grid(row=4, column=0, columnspan=2, sticky=tk.W+tk.E, pady=(0, 15))
         
         self.process_button = ttk.Button(process_frame, text="Cut Video", command=self.start_cutting)
         self.process_button.pack(fill=tk.X)
         
-        # Progress bar and status
+        # Progress bar, timer and status
         progress_frame = ttk.Frame(main_frame)
-        progress_frame.grid(row=4, column=0, columnspan=2, sticky=tk.W+tk.E)
+        progress_frame.grid(row=5, column=0, columnspan=2, sticky=tk.W+tk.E)
         
         self.progress_bar = ttk.Progressbar(progress_frame, length=100, mode='indeterminate')
         self.progress_bar.pack(fill=tk.X, pady=(0, 5))
         
+        timer_frame = ttk.Frame(progress_frame)
+        timer_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(timer_frame, text="Elapsed time:", font=("Arial", 10)).pack(side=tk.LEFT)
+        ttk.Label(timer_frame, textvariable=self.elapsed_time, font=("Arial", 10)).pack(side=tk.LEFT, padx=(5, 0))
+        
         self.status_label = ttk.Label(progress_frame, textvariable=self.status, font=("Arial", 10))
         self.status_label.pack(fill=tk.X)
+    
+    def update_params_frame(self):
+        """Update the parameters frame based on selected split mode"""
+        # Clear existing widgets
+        for widget in self.params_frame.winfo_children():
+            widget.destroy()
         
+        # Show relevant parameters based on selected mode
+        mode = self.split_mode.get()
+        if mode == "parts":
+            self.show_parts_params()
+        elif mode == "size":
+            self.show_size_params()
+        elif mode == "duration":
+            self.show_duration_params()
+    
+    def show_parts_params(self):
+        """Show parameters for splitting into equal parts"""
+        parts_frame = ttk.Frame(self.params_frame)
+        parts_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Label(parts_frame, text="Number of parts:").pack(side=tk.LEFT)
+        parts_spinner = ttk.Spinbox(parts_frame, from_=2, to=100, width=5, textvariable=self.num_parts)
+        parts_spinner.pack(side=tk.LEFT, padx=(5, 0))
+    
+    def show_size_params(self):
+        """Show parameters for splitting by size"""
+        size_frame = ttk.Frame(self.params_frame)
+        size_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Label(size_frame, text="Target size per part (MB):").pack(side=tk.LEFT)
+        size_spinner = ttk.Spinbox(size_frame, from_=1, to=9999, width=7, textvariable=self.target_size)
+        size_spinner.pack(side=tk.LEFT, padx=(5, 0))
+    
+    def show_duration_params(self):
+        """Show parameters for splitting by duration"""
+        duration_frame = ttk.Frame(self.params_frame)
+        duration_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Label(duration_frame, text="Target duration per part (minutes):").pack(side=tk.LEFT)
+        duration_spinner = ttk.Spinbox(duration_frame, from_=0.1, to=999.9, increment=0.1, width=7, textvariable=self.target_duration)
+        duration_spinner.pack(side=tk.LEFT, padx=(5, 0))
+        
+    def setup_drag_drop(self):
+        """Configure drag and drop functionality for video files"""
+        # Make root accept drop
+        self.root.drop_target_register("DND_Files")
+        self.root.dnd_bind("<<Drop>>", self.on_drop)
+    
+    def on_drop(self, event):
+        """Handle file drop event"""
+        file_path = event.data
+        
+        # Clean the path (remove {} and quotation marks if present)
+        if file_path.startswith('{') and file_path.endswith('}'): 
+            file_path = file_path[1:-1]
+        
+        # Check if it's a video file
+        valid_extensions = (".mp4", ".avi", ".mov", ".mkv", ".wmv")
+        if file_path.lower().endswith(valid_extensions):
+            self.video_path.set(file_path)
+            self.status.set(f"Video dropped: {os.path.basename(file_path)}")
+        else:
+            messagebox.showerror("Error", "The dropped file is not a supported video format.")
+    
     def browse_video(self):
         """Open file dialog to select a video file"""
         filetypes = (
@@ -94,32 +185,77 @@ class VideoCutterApp:
             self.video_path.set(video_file)
             self.status.set(f"Video selected: {os.path.basename(video_file)}")
     
+    def start_timer(self):
+        """Start the elapsed time timer"""
+        self.start_time = time.time()
+        self.timer_running = True
+        self.update_timer()
+    
+    def update_timer(self):
+        """Update the elapsed time display"""
+        if not self.timer_running:
+            return
+            
+        elapsed = time.time() - self.start_time
+        formatted_time = str(timedelta(seconds=int(elapsed)))
+        self.elapsed_time.set(formatted_time)
+        
+        # Schedule next update
+        self.timer_id = self.root.after(1000, self.update_timer)
+    
+    def stop_timer(self):
+        """Stop the elapsed time timer"""
+        if self.timer_id:
+            self.root.after_cancel(self.timer_id)
+        self.timer_running = False
+    
     def start_cutting(self):
         """Start the video cutting process"""
         video_path = self.video_path.get()
-        num_parts = self.num_parts.get()
+        mode = self.split_mode.get()
         
         if not video_path:
             messagebox.showerror("Error", "Please select a video file")
             return
         
-        if num_parts < 2:
-            messagebox.showerror("Error", "Number of parts must be at least 2")
-            return
+        if mode == "parts":
+            num_parts = self.num_parts.get()
+            if num_parts < 2:
+                messagebox.showerror("Error", "Number of parts must be at least 2")
+                return
+        elif mode == "size":
+            target_size = self.target_size.get()
+            if target_size <= 0:
+                messagebox.showerror("Error", "Target size must be greater than 0 MB")
+                return
+        elif mode == "duration":
+            target_duration = self.target_duration.get()
+            if target_duration <= 0:
+                messagebox.showerror("Error", "Target duration must be greater than 0 minutes")
+                return
         
         # Disable UI while processing
         self.is_processing = True
         self.process_button.config(state=tk.DISABLED)
         self.progress_bar.start(10)
+        self.elapsed_time.set("00:00:00")
+        self.start_timer()
         self.status.set("Processing... Getting video information")
         
         # Start processing in a separate thread
-        thread = threading.Thread(target=self.process_video, args=(video_path, num_parts))
+        mode = self.split_mode.get()
+        if mode == "parts":
+            thread = threading.Thread(target=self.process_video_parts, args=(video_path, self.num_parts.get()))
+        elif mode == "size":
+            thread = threading.Thread(target=self.process_video_size, args=(video_path, self.target_size.get()))
+        elif mode == "duration":
+            thread = threading.Thread(target=self.process_video_duration, args=(video_path, self.target_duration.get()))
+            
         thread.daemon = True
         thread.start()
     
-    def process_video(self, video_path, num_parts):
-        """Process the video in a separate thread"""
+    def process_video_parts(self, video_path, num_parts):
+        """Process the video by splitting into equal parts"""
         try:
             # Get video duration
             self.status.set("Processing... Analyzing video duration")
@@ -135,11 +271,94 @@ class VideoCutterApp:
             os.makedirs(output_dir, exist_ok=True)
             
             # Cut video
-            self.status.set("Processing... Cutting video into parts")
+            self.status.set("Processing... Cutting video into equal parts")
             success = cut_video_into_parts(
                 video_path, 
                 output_dir, 
                 num_parts, 
+                duration,
+                self.app_dir,
+                self.update_status
+            )
+            
+            if success:
+                self.root.after(0, lambda: self.show_success(output_dir))
+            else:
+                self.root.after(0, lambda: self.show_error("Error occurred while cutting the video"))
+                
+        except Exception as e:
+            self.root.after(0, lambda: self.show_error(f"Error: {str(e)}"))
+        finally:
+            # Re-enable UI
+            self.root.after(0, self.reset_ui)
+    
+    def process_video_size(self, video_path, target_size_mb):
+        """Process the video by splitting into parts of specified size"""
+        try:
+            # Get video size and duration
+            self.status.set("Processing... Analyzing video properties")
+            duration = get_video_duration(video_path, self.app_dir)
+            total_size = get_video_size(video_path)
+            
+            if duration <= 0:
+                self.root.after(0, lambda: self.show_error("Could not determine video duration"))
+                return
+            
+            if total_size <= 0:
+                self.root.after(0, lambda: self.show_error("Could not determine video size"))
+                return
+            
+            # Create output directory
+            video_name = os.path.splitext(os.path.basename(video_path))[0]
+            output_dir = os.path.join(os.path.dirname(video_path), f"{video_name}_parts")
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Cut video by size
+            self.status.set(f"Processing... Cutting video into {target_size_mb}MB parts")
+            success = cut_video_by_size(
+                video_path, 
+                output_dir, 
+                target_size_mb, 
+                duration,
+                total_size,
+                self.app_dir,
+                self.update_status
+            )
+            
+            if success:
+                self.root.after(0, lambda: self.show_success(output_dir))
+            else:
+                self.root.after(0, lambda: self.show_error("Error occurred while cutting the video"))
+                
+        except Exception as e:
+            self.root.after(0, lambda: self.show_error(f"Error: {str(e)}"))
+        finally:
+            # Re-enable UI
+            self.root.after(0, self.reset_ui)
+    
+    def process_video_duration(self, video_path, target_duration_min):
+        """Process the video by splitting into parts of specified duration"""
+        try:
+            # Get video duration
+            self.status.set("Processing... Analyzing video duration")
+            duration = get_video_duration(video_path, self.app_dir)
+            
+            if duration <= 0:
+                self.root.after(0, lambda: self.show_error("Could not determine video duration"))
+                return
+            
+            # Create output directory
+            video_name = os.path.splitext(os.path.basename(video_path))[0]
+            output_dir = os.path.join(os.path.dirname(video_path), f"{video_name}_parts")
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Cut video by duration
+            target_duration_sec = target_duration_min * 60  # Convert minutes to seconds
+            self.status.set(f"Processing... Cutting video into {target_duration_min}min parts")
+            success = cut_video_by_duration(
+                video_path, 
+                output_dir, 
+                target_duration_sec, 
                 duration,
                 self.app_dir,
                 self.update_status
@@ -175,6 +394,7 @@ class VideoCutterApp:
         self.is_processing = False
         self.process_button.config(state=tk.NORMAL)
         self.progress_bar.stop()
+        self.stop_timer()
 
 def main():
     root = tk.Tk()

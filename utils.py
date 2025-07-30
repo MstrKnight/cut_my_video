@@ -9,6 +9,7 @@ import os
 import subprocess
 import re
 import math
+import json
 
 def get_ffmpeg_path(app_dir):
     """Get the path to the FFmpeg executable"""
@@ -26,6 +27,24 @@ def get_ffmpeg_path(app_dir):
         return "ffmpeg"
     except (subprocess.SubprocessError, FileNotFoundError):
         raise FileNotFoundError("FFmpeg not found. Please ensure FFmpeg is installed or included in the assets folder.")
+
+def get_video_size(video_path):
+    """
+    Get the size of a video file in MB
+    
+    Args:
+        video_path (str): Path to the video file
+        
+    Returns:
+        float: Size in MB
+    """
+    try:
+        size_bytes = os.path.getsize(video_path)
+        size_mb = size_bytes / (1024 * 1024)  # Convert to MB
+        return size_mb
+    except Exception as e:
+        print(f"Error getting video size: {str(e)}")
+        return 0
 
 def get_video_duration(video_path, app_dir):
     """
@@ -154,4 +173,163 @@ def cut_video_into_parts(video_path, output_dir, num_parts, duration, app_dir, s
         return True
     except Exception as e:
         print(f"Error cutting video: {str(e)}")
+        return False
+
+def cut_video_by_size(video_path, output_dir, target_size_mb, duration, total_size_mb, app_dir, status_callback=None):
+    """
+    Cut a video into parts based on target size
+    
+    Args:
+        video_path (str): Path to the video file
+        output_dir (str): Directory to save the output files
+        target_size_mb (float): Target size per part in MB
+        duration (float): Duration of the video in seconds
+        total_size_mb (float): Total size of the video in MB
+        app_dir (str): Application directory
+        status_callback (function): Callback function for status updates
+        
+    Returns:
+        bool: Success status
+    """
+    ffmpeg_path = get_ffmpeg_path(app_dir)
+    
+    try:
+        # Estimate the bitrate of the video
+        bitrate = (total_size_mb * 8 * 1024 * 1024) / duration  # bits per second
+        
+        # Calculate how many parts we'll need
+        num_parts = math.ceil(total_size_mb / target_size_mb)
+        
+        # Calculate segment duration
+        segment_duration = duration / num_parts
+        
+        if status_callback:
+            status_callback(f"Will create approximately {num_parts} parts of {target_size_mb}MB each")
+        
+        # Get file extension
+        _, ext = os.path.splitext(video_path)
+        if not ext:
+            ext = ".mp4"  # Default extension
+        
+        # Create parts
+        for i in range(num_parts):
+            if status_callback:
+                status_callback(f"Processing part {i+1} of {num_parts}...")
+                
+            start_time = i * segment_duration
+            
+            # For the last segment, use the full duration to avoid rounding issues
+            if i == num_parts - 1:
+                cmd = [
+                    ffmpeg_path,
+                    "-y",  # Overwrite output files
+                    "-i", video_path,
+                    "-ss", format_time(start_time),
+                    "-c", "copy",  # Copy streams without re-encoding
+                    os.path.join(output_dir, f"part_{i+1:03d}{ext}")
+                ]
+            else:
+                cmd = [
+                    ffmpeg_path,
+                    "-y",  # Overwrite output files
+                    "-i", video_path,
+                    "-ss", format_time(start_time),
+                    "-t", format_time(segment_duration),
+                    "-c", "copy",  # Copy streams without re-encoding
+                    os.path.join(output_dir, f"part_{i+1:03d}{ext}")
+                ]
+            
+            # Run FFmpeg command
+            process = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            if process.returncode != 0:
+                print(f"Error cutting part {i+1}: {process.stderr}")
+                if status_callback:
+                    status_callback(f"Error processing part {i+1}")
+                return False
+        
+        return True
+    except Exception as e:
+        print(f"Error cutting video by size: {str(e)}")
+        return False
+
+def cut_video_by_duration(video_path, output_dir, target_duration, total_duration, app_dir, status_callback=None):
+    """
+    Cut a video into parts based on target duration
+    
+    Args:
+        video_path (str): Path to the video file
+        output_dir (str): Directory to save the output files
+        target_duration (float): Target duration per part in seconds
+        total_duration (float): Total duration of the video in seconds
+        app_dir (str): Application directory
+        status_callback (function): Callback function for status updates
+        
+    Returns:
+        bool: Success status
+    """
+    ffmpeg_path = get_ffmpeg_path(app_dir)
+    
+    try:
+        # Calculate how many parts we'll need
+        num_parts = math.ceil(total_duration / target_duration)
+        
+        if status_callback:
+            status_callback(f"Will create approximately {num_parts} parts of {target_duration/60:.1f} minutes each")
+        
+        # Get file extension
+        _, ext = os.path.splitext(video_path)
+        if not ext:
+            ext = ".mp4"  # Default extension
+        
+        # Create parts
+        for i in range(num_parts):
+            if status_callback:
+                status_callback(f"Processing part {i+1} of {num_parts}...")
+                
+            start_time = i * target_duration
+            
+            # For the last segment, use the remaining duration
+            if i == num_parts - 1:
+                cmd = [
+                    ffmpeg_path,
+                    "-y",  # Overwrite output files
+                    "-i", video_path,
+                    "-ss", format_time(start_time),
+                    "-c", "copy",  # Copy streams without re-encoding
+                    os.path.join(output_dir, f"part_{i+1:03d}{ext}")
+                ]
+            else:
+                cmd = [
+                    ffmpeg_path,
+                    "-y",  # Overwrite output files
+                    "-i", video_path,
+                    "-ss", format_time(start_time),
+                    "-t", format_time(target_duration),
+                    "-c", "copy",  # Copy streams without re-encoding
+                    os.path.join(output_dir, f"part_{i+1:03d}{ext}")
+                ]
+            
+            # Run FFmpeg command
+            process = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            if process.returncode != 0:
+                print(f"Error cutting part {i+1}: {process.stderr}")
+                if status_callback:
+                    status_callback(f"Error processing part {i+1}")
+                return False
+        
+        return True
+    except Exception as e:
+        print(f"Error cutting video by duration: {str(e)}")
         return False
