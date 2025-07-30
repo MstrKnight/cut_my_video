@@ -44,7 +44,6 @@ class VideoCutterApp:
             self.app_dir = os.path.dirname(os.path.abspath(__file__))
         
         self.create_widgets()
-        self.setup_drag_drop()
         
     def create_widgets(self):
         # Main frame
@@ -52,7 +51,7 @@ class VideoCutterApp:
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # Video selection
-        ttk.Label(main_frame, text="Select Video (or drag and drop):", font=("Arial", 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
+        ttk.Label(main_frame, text="Select Video:", font=("Arial", 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
         
         video_frame = ttk.Frame(main_frame)
         video_frame.grid(row=1, column=0, columnspan=2, sticky=tk.W+tk.E, pady=(0, 15))
@@ -147,27 +146,8 @@ class VideoCutterApp:
         duration_spinner = ttk.Spinbox(duration_frame, from_=0.1, to=999.9, increment=0.1, width=7, textvariable=self.target_duration)
         duration_spinner.pack(side=tk.LEFT, padx=(5, 0))
         
-    def setup_drag_drop(self):
-        """Configure drag and drop functionality for video files"""
-        # Make root accept drop
-        self.root.drop_target_register("DND_Files")
-        self.root.dnd_bind("<<Drop>>", self.on_drop)
-    
-    def on_drop(self, event):
-        """Handle file drop event"""
-        file_path = event.data
-        
-        # Clean the path (remove {} and quotation marks if present)
-        if file_path.startswith('{') and file_path.endswith('}'): 
-            file_path = file_path[1:-1]
-        
-        # Check if it's a video file
-        valid_extensions = (".mp4", ".avi", ".mov", ".mkv", ".wmv")
-        if file_path.lower().endswith(valid_extensions):
-            self.video_path.set(file_path)
-            self.status.set(f"Video dropped: {os.path.basename(file_path)}")
-        else:
-            messagebox.showerror("Error", "The dropped file is not a supported video format.")
+    # Note: Drag-and-drop functionality was removed due to compatibility issues
+    # To implement drag-and-drop, the TkinterDnD2 package would need to be installed
     
     def browse_video(self):
         """Open file dialog to select a video file"""
@@ -398,7 +378,32 @@ class VideoCutterApp:
 
 def main():
     root = tk.Tk()
+    root.title("Cut It Now - Video Cutter")
     app = VideoCutterApp(root)
+    
+    # Update idletasks to calculate widget sizes
+    root.update_idletasks()
+    
+    # Get window size based on content
+    width = root.winfo_reqwidth()
+    height = root.winfo_reqheight()
+    
+    # Add some padding
+    width = min(width + 20, 500)  # Max width of 500 pixels
+    height = min(height + 20, 400)  # Max height of 400 pixels
+    
+    # Center the window on screen
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    x = (screen_width - width) // 2
+    y = (screen_height - height) // 2
+    
+    # Set window size and position
+    root.geometry(f"{width}x{height}+{x}+{y}")
+    
+    # Disable resizing if window is already optimal size
+    root.resizable(True, True)
+    
     root.mainloop()
 
 if __name__ == "__main__":
