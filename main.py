@@ -8,12 +8,15 @@ A simple GUI application to cut videos into equal parts.
 
 import os
 import sys
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
-import threading
 import time
+import threading
+import subprocess
 from datetime import timedelta
-from utils import get_video_duration, cut_video_into_parts, cut_video_by_size, cut_video_by_duration, get_video_size
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+from tkinterdnd2 import DND_FILES, TkinterDnD
+
+from utils import get_video_duration, cut_video_into_parts, get_video_size, cut_video_by_size, cut_video_by_duration
 
 class VideoCutterApp:
     def __init__(self, root):
@@ -44,6 +47,7 @@ class VideoCutterApp:
             self.app_dir = os.path.dirname(os.path.abspath(__file__))
         
         self.create_widgets()
+        self.setup_drag_drop()
         
     def create_widgets(self):
         # Main frame
@@ -51,13 +55,14 @@ class VideoCutterApp:
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # Video selection
-        ttk.Label(main_frame, text="Select Video:", font=("Arial", 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
+        ttk.Label(main_frame, text="Select Video (or drag and drop):", font=("Arial", 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
         
         video_frame = ttk.Frame(main_frame)
         video_frame.grid(row=1, column=0, columnspan=2, sticky=tk.W+tk.E, pady=(0, 15))
         
-        self.video_entry = ttk.Entry(video_frame, textvariable=self.video_path, width=50)
-        self.video_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # Create the entry field with normal layout
+        self.video_entry = ttk.Entry(video_frame, textvariable=self.video_path, width=40)
+        self.video_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         
         ttk.Button(video_frame, text="Browse", command=self.browse_video).pack(side=tk.RIGHT, padx=(5, 0))
         
@@ -101,6 +106,7 @@ class VideoCutterApp:
         ttk.Label(timer_frame, text="Elapsed time:", font=("Arial", 10)).pack(side=tk.LEFT)
         ttk.Label(timer_frame, textvariable=self.elapsed_time, font=("Arial", 10)).pack(side=tk.LEFT, padx=(5, 0))
         
+        # Status label
         self.status_label = ttk.Label(progress_frame, textvariable=self.status, font=("Arial", 10))
         self.status_label.pack(fill=tk.X)
     
@@ -146,24 +152,93 @@ class VideoCutterApp:
         duration_spinner = ttk.Spinbox(duration_frame, from_=0.1, to=999.9, increment=0.1, width=7, textvariable=self.target_duration)
         duration_spinner.pack(side=tk.LEFT, padx=(5, 0))
         
-    # Note: Drag-and-drop functionality was removed due to compatibility issues
-    # To implement drag-and-drop, the TkinterDnD2 package would need to be installed
+    def setup_drag_drop(self):
+        """Configure drag and drop functionality for video files"""
+        # Make root accept file drops
+        self.root.drop_target_register(DND_FILES)
+        self.root.dnd_bind('<<Drop>>', self.on_drop)
+        
+        # Also make the entry widget and main window accept drops
+        self.video_entry.drop_target_register(DND_FILES)
+        self.video_entry.dnd_bind('<<Drop>>', self.on_drop)
+        
+    def truncate_path(self, path, max_length=40):
+        """Truncate a long path for display"""
+        if len(path) <= max_length:
+            return path
+        
+        # Get filename and keep it intact
+        filename = os.path.basename(path)
+        # Get directory part
+        directory = os.path.dirname(path)
+        
+        if len(filename) >= max_length - 5:  # If filename alone is too long
+            # Truncate filename but keep extension
+            name, ext = os.path.splitext(filename)
+            avail_chars = max_length - 5 - len(ext)  # Account for "..." and extension
+            return name[:avail_chars] + "..." + ext
+        else:
+            # Truncate directory part
+            avail_chars = max_length - len(filename) - 5  # Account for "..." and filename
+            return directory[:avail_chars] + "..." + os.sep + filename
+    
+    def on_drop(self, event):
+        """Handle file drop event"""
+        file_path = event.data
+        
+        # Clean the path (remove {} and quotation marks if present)
+        if file_path.startswith('{') and file_path.endswith('}'): 
+            file_path = file_path[1:-1]
+        file_path = file_path.strip('"')
+        
+        # Check if it's a video file
+        valid_extensions = (".mp4", ".avi", ".mov", ".mkv", ".wmv")
+        if file_path.lower().endswith(valid_extensions):
+            # Store the full path but display truncated version
+            self.full_video_path = file_path
+            self.video_path.set(self.truncate_path(file_path))
+            
+            # Copy full path to clipboard for convenience
+            self.root.clipboard_clear()
+            self.root.clipboard_append(file_path)
+            
+            # Show just the filename (truncated if needed) in the status bar
+            filename = os.path.basename(file_path)
+            # Truncate filename if it's too long (max 30 chars)
+            if len(filename) > 30:
+                name, ext = os.path.splitext(filename)
+                filename = name[:26] + "..." + ext
+            self.status.set(f"Video dropped: {filename}")
+        else:
+            messagebox.showerror("Error", "The dropped file is not a supported video format.")
     
     def browse_video(self):
-        """Open file dialog to select a video file"""
-        filetypes = (
+        """Open file dialog to select video"""
+        filetypes = [
             ("Video files", "*.mp4 *.avi *.mov *.mkv *.wmv"),
             ("All files", "*.*")
-        )
-        
-        video_file = filedialog.askopenfilename(
+        ]
+        file_path = filedialog.askopenfilename(
             title="Select a video file",
             filetypes=filetypes
         )
-        
-        if video_file:
-            self.video_path.set(video_file)
-            self.status.set(f"Video selected: {os.path.basename(video_file)}")
+        if file_path:
+            # Store the full path but display truncated version
+            self.full_video_path = file_path
+            self.video_path.set(self.truncate_path(file_path))
+            
+            # Copy full path to clipboard for convenience if it was truncated
+            if len(file_path) > 40:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(file_path)
+            
+            # Show the filename (truncated if needed) in status
+            filename = os.path.basename(file_path)
+            # Truncate filename if it's too long (max 30 chars)
+            if len(filename) > 30:
+                name, ext = os.path.splitext(filename)
+                filename = name[:26] + "..." + ext
+            self.status.set(f"Video selected: {filename}")
     
     def start_timer(self):
         """Start the elapsed time timer"""
@@ -191,7 +266,8 @@ class VideoCutterApp:
     
     def start_cutting(self):
         """Start the video cutting process"""
-        video_path = self.video_path.get()
+        # Use the full path stored during selection/drop instead of potentially truncated path
+        video_path = getattr(self, 'full_video_path', self.video_path.get())
         mode = self.split_mode.get()
         
         if not video_path:
@@ -361,8 +437,25 @@ class VideoCutterApp:
     
     def show_success(self, output_dir):
         """Show success message"""
+        # Show full path in the dialog box
         messagebox.showinfo("Success", f"Video successfully cut into parts!\nOutput directory: {output_dir}")
-        self.status.set(f"Done. Files saved to {output_dir}")
+        
+        # Truncate path for status bar
+        if len(output_dir) > 40:
+            # Try to keep the folder name visible
+            folder_name = os.path.basename(output_dir)
+            parent_dir = os.path.dirname(output_dir)
+            
+            if len(folder_name) > 20:  # If folder name itself is too long
+                truncated_path = folder_name[:17] + "..."
+            else:
+                # Show drive letter + ... + folder name
+                drive = os.path.splitdrive(output_dir)[0] + os.sep
+                truncated_path = drive + "..." + os.sep + folder_name
+        else:
+            truncated_path = output_dir
+            
+        self.status.set(f"Done. Files saved to {truncated_path}")
     
     def show_error(self, message):
         """Show error message"""
@@ -377,7 +470,8 @@ class VideoCutterApp:
         self.stop_timer()
 
 def main():
-    root = tk.Tk()
+    # Use TkinterDnD.Tk instead of tk.Tk for drag-and-drop support
+    root = TkinterDnD.Tk()
     root.title("Cut It Now - Video Cutter")
     app = VideoCutterApp(root)
     
