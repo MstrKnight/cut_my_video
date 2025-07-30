@@ -44,10 +44,24 @@ def run_ffmpeg_hidden(*args, **kwargs):
 
 def get_ffmpeg_path(app_dir):
     """Get the path to the FFmpeg executable"""
-    # Check if we're using bundled FFmpeg
-    ffmpeg_path = os.path.join(app_dir, "assets", "ffmpeg.exe")
-    if os.path.exists(ffmpeg_path):
-        return ffmpeg_path
+    # Check multiple possible locations for ffmpeg.exe
+    possible_paths = [
+        # Regular path when running as script
+        os.path.join(app_dir, "assets", "ffmpeg.exe"),
+        
+        # Path when running as frozen PyInstaller executable
+        os.path.join(app_dir, "assets", "ffmpeg.exe"),
+        os.path.join(app_dir, "ffmpeg.exe"),
+        
+        # Try looking in the PyInstaller _MEIPASS directory if we're frozen
+        os.path.join(getattr(sys, '_MEIPASS', app_dir), "assets", "ffmpeg.exe"),
+    ]
+    
+    # Try each path
+    for path in possible_paths:
+        if os.path.exists(path):
+            print(f"Found ffmpeg at: {path}")
+            return path
     
     # Fallback: Try to use system FFmpeg if available
     try:
